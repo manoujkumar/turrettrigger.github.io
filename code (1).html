@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trigger Turret</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #1a1a2e; /* Dark space blue */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #e0e0e0;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            background-color: #0f0f1a; /* Darker arena */
+            border: 2px solid #4a4a8a; /* Purple-ish border */
+            box-shadow: 0 0 20px rgba(74, 74, 138, 0.5);
+        }
+        canvas {
+            display: block;
+            background-color: transparent; /* Canvas bg is handled by container */
+            cursor: crosshair;
+        }
+        .ui-element {
+            position: absolute;
+            padding: 5px 15px;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 4px;
+            font-size: 1.5em;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #scoreP1 {
+            top: 10px;
+            left: 10px;
+            color: #4fc3f7; /* Light Blue */
+             border-bottom: 3px solid #4fc3f7;
+        }
+        #scoreP2 {
+            top: 10px;
+            right: 10px;
+            color: #ff7043; /* Orange/Red */
+             border-bottom: 3px solid #ff7043;
+        }
+        #timer {
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+             border-bottom: 3px solid #fff;
+        }
+         #message {
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 1.8em;
+            color: #fdd835; /* Yellow */
+            display: none; /* Hidden initially */
+            text-align: center;
+         }
+         #startMessage {
+             position: absolute;
+             top: 50%;
+             left: 50%;
+             transform: translate(-50%, -50%);
+             font-size: 2em;
+             color: #fff;
+             text-align: center;
+             background-color: rgba(0,0,0,0.7);
+             padding: 20px;
+             border-radius: 10px;
+             z-index: 10; /* Ensure it's on top */
+         }
+         #startMessage button {
+             padding: 10px 20px;
+             font-size: 1em;
+             margin-top: 15px;
+             cursor: pointer;
+             background-color: #4a4a8a;
+             color: #fff;
+             border: none;
+             border-radius: 5px;
+             transition: background-color 0.2s;
+         }
+          #startMessage button:hover {
+              background-color: #6a6aac;
+          }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="scoreP1" class="ui-element">P1: 0</div>
+        <div id="scoreP2" class="ui-element">P2: 0</div>
+        <div id="timer" class="ui-element">Time: 60</div>
+        <div id="message" class="ui-element"></div>
+        <div id="startMessage">
+            <h1>Trigger Turret</h1>
+            <p>Player 1: Left Click<br>Player 2: Right Click</p>
+            <button id="startButton">Start Game</button>
+        </div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('gameContainer');
+
+        // --- UI Elements ---
+        const scoreP1Element = document.getElementById('scoreP1');
+        const scoreP2Element = document.getElementById('scoreP2');
+        const timerElement = document.getElementById('timer');
+        const messageElement = document.getElementById('message');
+        const startMessageElement = document.getElementById('startMessage');
+        const startButton = document.getElementById('startButton');
+
+        // --- Game Constants & State ---
+        const PLAYER1_COLOR = '#4fc3f7'; // Light Blue
+        const PLAYER2_COLOR = '#ff7043'; // Orange/Red
+        const TURRET_COLOR = '#9e9e9e'; // Grey
+        const TURRET_BARREL_COLOR = '#f5f5f5'; // Lighter Grey
+        const ENEMY_COLOR = '#ef5350'; // Red
+        const BULLET_SPEED = 7;
+        const ENEMY_SPEED = 1;
+        const GAME_DURATION_SECONDS = 60;
+        const TURRET_COOLDOWN = 250; // milliseconds
+        const ENEMY_SPAWN_RATE = 1200; // milliseconds
+        const LASER_SIGHT_COLOR = 'rgba(255, 50, 50, 0.4)'; // Semi-transparent red
+        const LASER_SIGHT_LENGTH = 1000; // Make it long enough to go off-screen
+
+        let scoreP1 = 0;
+        let scoreP2 = 0;
+        let gameTimeRemaining = GAME_DURATION_SECONDS;
+        let isGameOver = false;
+        let gameRunning = false; // To control start state
+        let lastTime = 0;
+        let gameLoopId = null;
+        let enemySpawnTimer = 0;
+
+        // --- Game Objects Arrays ---
+        let turrets = [];
+        let bullets = [];
+        let enemies = [];
+        // let effects = []; // Future use for particle effects
+
+        // --- Classes ---
+        class Turret {
+            constructor(x, y, rotationSpeed) {
+                this.x = x;
+                this.y = y;
+                this.radius = 20;
+                this.barrelLength = 30;
+                this.angle = Math.random() * Math.PI * 2; // Start at random angle
+                this.rotationSpeed = rotationSpeed * (Math.random() < 0.5 ? 1 : -1); // Degrees per second, random direction
+                this.lastFiredTime = 0;
+                this.baseColor = TURRET_COLOR; // Store base color for flashing
+            }
+
+            update(deltaTime) {
+                // Convert speed from degrees/sec to radians/sec, then apply delta time
+                const rotationRadians = (this.rotationSpeed * Math.PI / 180) * deltaTime;
+                this.angle += rotationRadians;
+                // Keep angle within 0 to 2*PI
+                this.angle %= (Math.PI * 2);
+                if (this.angle < 0) this.angle += (Math.PI * 2); // Ensure positive angle
+            }
+
+            draw(ctx) {
+                // Base
+                ctx.fillStyle = this.baseColor; // Use instance's base color
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#666';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Barrel and Laser Sight (use save/restore for rotation)
+                ctx.save(); // Save context state
+                ctx.translate(this.x, this.y); // Move origin to turret center
+                ctx.rotate(this.angle); // Rotate context
+
+                // Barrel
+                ctx.fillStyle = TURRET_BARREL_COLOR;
+                ctx.fillRect(0, -3, this.barrelLength, 6); // Draw barrel centered on new origin
+
+                // <<< ADDED START >>>
+                // Laser Sight Line
+                ctx.beginPath();
+                // Start at the tip of the barrel (in the rotated coordinate system)
+                ctx.moveTo(this.barrelLength, 0);
+                // End far away in the direction the barrel is pointing
+                ctx.lineTo(this.barrelLength + LASER_SIGHT_LENGTH, 0);
+                ctx.strokeStyle = LASER_SIGHT_COLOR;
+                ctx.lineWidth = 1.5; // Make it slightly thicker than the grid lines
+                ctx.stroke();
+                // <<< ADDED END >>>
+
+                ctx.restore(); // Restore context state
+            }
+
+             canFire(currentTime) {
+                 return currentTime - this.lastFiredTime >= TURRET_COOLDOWN;
+             }
+
+            fire(playerId, currentTime) {
+                 if (!this.canFire(currentTime)) return; // Check cooldown
+
+                 this.lastFiredTime = currentTime;
+                const bulletColor = playerId === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                const bulletStartX = this.x + Math.cos(this.angle) * this.barrelLength;
+                const bulletStartY = this.y + Math.sin(this.angle) * this.barrelLength;
+
+                bullets.push(new Bullet(bulletStartX, bulletStartY, this.angle, playerId, bulletColor));
+                // playSound('turret_fire'); // Placeholder
+                 // Visual feedback - Quick flash
+                 this.flash(bulletColor);
+            }
+
+             flash(color) {
+                 const originalColor = TURRET_COLOR; // Get default color
+                 this.baseColor = color; // Change instance color
+                 setTimeout(() => { this.baseColor = originalColor; }, 80); // Flash duration
+             }
+        }
+
+        class Bullet {
+            constructor(x, y, angle, playerId, color) {
+                this.x = x;
+                this.y = y;
+                this.angle = angle;
+                this.playerId = playerId;
+                this.color = color;
+                this.size = 5;
+                this.speed = BULLET_SPEED;
+                this.vx = Math.cos(angle) * this.speed;
+                this.vy = Math.sin(angle) * this.speed;
+            }
+
+            update(deltaTime) { // DeltaTime isn't strictly needed if speed is constant per frame
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class Enemy {
+             constructor(x, y, radius, speed) {
+                 this.x = x;
+                 this.y = y;
+                 this.radius = radius;
+                 this.speed = speed;
+                 this.color = ENEMY_COLOR;
+                 // Basic behavior: move straight down
+                 this.vx = 0;
+                 this.vy = speed;
+             }
+
+             update(deltaTime) { // DeltaTime isn't strictly needed if speed is constant per frame
+                 this.x += this.vx;
+                 this.y += this.vy;
+             }
+
+             draw(ctx) {
+                 ctx.fillStyle = this.color;
+                 ctx.beginPath();
+                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                 ctx.fill();
+                 // Simple "eye" for direction indication
+                 ctx.fillStyle = '#fff';
+                 ctx.beginPath();
+                 ctx.arc(this.x, this.y - this.radius * 0.3, this.radius * 0.2, 0, Math.PI * 2);
+                 ctx.fill();
+             }
+        }
+
+        // --- Game Functions ---
+
+        function initGame() {
+            scoreP1 = 0;
+            scoreP2 = 0;
+            gameTimeRemaining = GAME_DURATION_SECONDS;
+            isGameOver = false;
+            gameRunning = true; // Allow game loop to proceed
+            lastTime = performance.now();
+            enemySpawnTimer = ENEMY_SPAWN_RATE; // Spawn first enemy quickly
+
+            bullets = [];
+            enemies = [];
+            turrets = []; // Clear existing turrets
+
+             // Position turrets (example placement)
+             turrets.push(new Turret(100, 150, 40)); // x, y, degrees/sec
+             turrets.push(new Turret(700, 150, -60));
+             turrets.push(new Turret(150, 450, 30));
+             turrets.push(new Turret(650, 450, -50));
+             turrets.push(new Turret(400, 300, 25)); // Center turret
+
+            updateUI();
+            messageElement.style.display = 'none'; // Hide any previous messages
+            startMessageElement.style.display = 'none'; // Hide start message
+
+            // Start the game loop
+             if (gameLoopId) cancelAnimationFrame(gameLoopId); // Clear previous loop if any
+             gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        function spawnEnemy() {
+             const radius = 15 + Math.random() * 10; // Random size
+             const spawnX = radius + Math.random() * (canvas.width - radius * 2);
+             const spawnY = -radius; // Start just above the screen
+             const speed = ENEMY_SPEED + Math.random() * 0.5;
+             enemies.push(new Enemy(spawnX, spawnY, radius, speed));
+             // playSound('enemy_spawn'); // Placeholder
+        }
+
+        function update(deltaTime) {
+            if (isGameOver || !gameRunning) return;
+
+            // Update Timers
+            gameTimeRemaining -= deltaTime / 1000; // deltaTime is in ms
+             enemySpawnTimer -= deltaTime;
+
+             if (gameTimeRemaining <= 0) {
+                 gameTimeRemaining = 0;
+                 endGame();
+             }
+
+             // Spawn Enemies
+             if (enemySpawnTimer <= 0) {
+                 spawnEnemy();
+                 enemySpawnTimer = ENEMY_SPAWN_RATE * (0.8 + Math.random() * 0.4); // Add some randomness
+             }
+
+            // Update Game Objects
+            // Delta time needs to be in seconds for rotation speed calculation
+            const dtSeconds = deltaTime / 1000.0;
+            turrets.forEach(turret => turret.update(dtSeconds)); // Pass delta time in seconds
+            bullets.forEach(bullet => bullet.update(deltaTime)); // Keep as ms if speed is per frame update
+            enemies.forEach(enemy => enemy.update(deltaTime)); // Keep as ms if speed is per frame update
+
+            // Collision Detection: Bullets vs Enemies
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                let bulletRemoved = false;
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    const enemy = enemies[j];
+                    const dx = bullet.x - enemy.x;
+                    const dy = bullet.y - enemy.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < bullet.size + enemy.radius) {
+                        // Collision!
+                        // playSound('enemy_hit'); // Placeholder
+                        if (bullet.playerId === 1) {
+                            scoreP1++;
+                        } else {
+                            scoreP2++;
+                        }
+                        enemies.splice(j, 1); // Remove enemy
+                        bullets.splice(i, 1); // Remove bullet
+                         bulletRemoved = true;
+                         break; // Bullet can only hit one enemy
+                    }
+                }
+                 // Check bullet boundaries after checking hits
+                 if (!bulletRemoved && (bullet.x < 0 || bullet.x > canvas.width || bullet.y < 0 || bullet.y > canvas.height)) {
+                    bullets.splice(i, 1);
+                }
+            }
+
+             // Remove enemies that move off screen (bottom)
+            enemies = enemies.filter(enemy => enemy.y < canvas.height + enemy.radius);
+
+            updateUI();
+        }
+
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Could draw a background grid or stars here
+            // Example simple grid:
+             ctx.strokeStyle = '#2a2a3e';
+             ctx.lineWidth = 1;
+             for (let x = 0; x < canvas.width; x += 50) {
+                 ctx.beginPath();
+                 ctx.moveTo(x, 0);
+                 ctx.lineTo(x, canvas.height);
+                 ctx.stroke();
+             }
+              for (let y = 0; y < canvas.height; y += 50) {
+                 ctx.beginPath();
+                 ctx.moveTo(0, y);
+                 ctx.lineTo(canvas.width, y);
+                 ctx.stroke();
+             }
+
+            // Draw Game Objects
+            // Draw laser sights *first* so they are behind bullets/enemies if needed (optional)
+            turrets.forEach(turret => turret.draw(ctx)); // Laser sight is drawn within turret.draw
+            enemies.forEach(enemy => enemy.draw(ctx));
+            bullets.forEach(bullet => bullet.draw(ctx));
+            // effects.forEach(effect => effect.draw(ctx));
+        }
+
+        function updateUI() {
+            scoreP1Element.textContent = `P1: ${scoreP1}`;
+            scoreP2Element.textContent = `P2: ${scoreP2}`;
+            timerElement.textContent = `Time: ${Math.ceil(gameTimeRemaining)}`;
+        }
+
+        function endGame() {
+            isGameOver = true;
+            gameRunning = false; // Stop updates
+             if (gameLoopId) {
+                 cancelAnimationFrame(gameLoopId);
+                 gameLoopId = null;
+             }
+             // playSound('game_over'); // Placeholder
+
+             let winnerMessage;
+             if (scoreP1 > scoreP2) {
+                 winnerMessage = `Player 1 Wins! (${scoreP1} - ${scoreP2})`;
+             } else if (scoreP2 > scoreP1) {
+                 winnerMessage = `Player 2 Wins! (${scoreP2} - ${scoreP1})`;
+             } else {
+                 winnerMessage = `It's a Draw! (${scoreP1} - ${scoreP1})`;
+             }
+             messageElement.textContent = `Game Over! ${winnerMessage}`;
+             messageElement.style.display = 'block';
+
+            // Show start button again for replay
+            startMessageElement.querySelector('h1').textContent = "Game Over!";
+            startMessageElement.querySelector('p').innerHTML = `${winnerMessage}<br><br>Player 1: Left Click<br>Player 2: Right Click`;
+             startButton.textContent = "Play Again?";
+             startMessageElement.style.display = 'flex'; // Use flex for centering start box content
+        }
+
+        function gameLoop(currentTime) {
+            if (!gameRunning && !isGameOver) { // Added !isGameOver check to prevent loop call after game ends
+                 startMessageElement.style.display = 'flex'; // Ensure start message is visible if not running
+                 return; // Don't run if paused or not started yet
+            }
+            if (isGameOver) return; // Explicitly stop if game over
+
+
+             gameLoopId = requestAnimationFrame(gameLoop); // Request next frame
+
+            const deltaTime = currentTime - lastTime;
+            if (deltaTime < 8) { // Basic frame skipping / minimum delta time to avoid large jumps on tab resume etc.
+                 // lastTime = currentTime; // Don't update lastTime if skipping frame update
+                 return;
+            }
+            lastTime = currentTime;
+
+
+            update(deltaTime);
+            draw();
+        }
+
+        function handleInput(event) {
+            if (isGameOver || !gameRunning) return; // Ignore input if game isn't active
+
+            event.preventDefault(); // Prevent context menu on right click
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const clickX = (event.clientX - rect.left) * scaleX;
+            const clickY = (event.clientY - rect.top) * scaleY;
+
+            const playerId = (event.button === 0) ? 1 : (event.button === 2) ? 2 : 0; // 0=Left, 2=Right
+             if (playerId === 0) return; // Ignore middle clicks or other buttons
+
+             const timeNow = performance.now();
+
+             // Check if click hit a turret
+            turrets.forEach(turret => {
+                const dx = clickX - turret.x;
+                const dy = clickY - turret.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance <= turret.radius) {
+                    // playSound('turret_hit'); // Placeholder
+                     if (turret.canFire(timeNow)) {
+                        turret.fire(playerId, timeNow);
+                    } else {
+                         // Maybe a 'cooldown' click sound?
+                         // playSound('cooldown_click');
+                    }
+                }
+            });
+        }
+
+        // --- Placeholder Sound Function ---
+        function playSound(soundId) {
+            // In a real implementation, use Web Audio API or new Audio()
+            // console.log(`Playing sound: ${soundId}`); // Simulate sound
+        }
+
+        // --- Event Listeners ---
+        canvas.addEventListener('mousedown', handleInput);
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // Prevent right-click menu
+        startButton.addEventListener('click', initGame);
+
+        // --- Initial Setup ---
+         // Draw initial state before game starts (optional)
+         ctx.fillStyle = '#0f0f1a';
+         ctx.fillRect(0,0, canvas.width, canvas.height);
+         // Draw grid initially as well
+         ctx.strokeStyle = '#2a2a3e';
+         ctx.lineWidth = 1;
+         for (let x = 0; x < canvas.width; x += 50) {
+             ctx.beginPath();
+             ctx.moveTo(x, 0);
+             ctx.lineTo(x, canvas.height);
+             ctx.stroke();
+         }
+          for (let y = 0; y < canvas.height; y += 50) {
+             ctx.beginPath();
+             ctx.moveTo(0, y);
+             ctx.lineTo(canvas.width, y);
+             ctx.stroke();
+         }
+         updateUI(); // Show initial scores/time
+         // Don't start game loop until button press
+         startMessageElement.style.display = 'flex'; // Show start message initially
+
+    </script>
+</body>
+</html>
